@@ -2,10 +2,16 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+#define NUM_FLAGS 3
+#define MIN_ARGS  3
+
 typedef struct {
     ngx_str_t cookie_name;
     ngx_flag_t httponly;
     ngx_flag_t secure;
+    ngx_flag_t samesite;
+    ngx_flag_t samesite_lax;
+    ngx_flag_t samesite_strict;
 } ngx_http_cookie_t;
 
 typedef struct {
@@ -18,6 +24,40 @@ static char *ngx_http_cookie_flag_filter_merge_loc_conf(ngx_conf_t *cf, void *pa
 static ngx_int_t ngx_http_cookie_flag_filter_init(ngx_conf_t *cf);
 static ngx_int_t ngx_http_cookie_flag_filter_append(ngx_http_request_t *r, ngx_http_cookie_t *flag, ngx_table_elt_t *header);
 static ngx_int_t ngx_http_cookie_flag_filter_handler(ngx_http_request_t *r);
+static size_t ngx_char_pos(ngx_str_t str, u_char ch);
+static u_char *ngx_get_arg_name(ngx_pool_t *pool, ngx_str_t src);
+
+static size_t ngx_char_pos(ngx_str_t str, u_char ch) {
+
+    char *pos = NULL;
+    size_t ind = 0;
+    pos = strchr((char *) str.data, (int) ch);
+    if (pos != NULL) {
+        ind = (size_t) (pos - (char *) str.data);
+    }
+    return ind;
+
+}
+
+static u_char *ngx_get_arg_name(ngx_pool_t *pool, ngx_str_t src) {
+
+    u_char  *dst;
+    size_t pos;
+
+    pos = ngx_char_pos(src, '=');
+
+    if(pos) {
+        dst = ngx_pnalloc(pool, pos + 1);
+        if (dst == NULL) {
+            return NULL;
+        }
+        ngx_memcpy(dst, src.data, pos);
+        return dst;
+    } else {
+        return src.data;
+    }
+
+}
 
 static ngx_command_t ngx_http_cookie_flag_filter_commands[] = {
 
@@ -73,19 +113,27 @@ ngx_http_cookie_flag_filter_cmd(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     ngx_http_cookie_t *cookie, tmp;
     ngx_str_t *value;
-    ngx_uint_t i;
+    ngx_uint_t i, j;
 
     value = cf->args->elts;
 
-    if (cf->args->nelts > 4 || cf->args->nelts < 3) {
+    if (cf->args->nelts > (NUM_FLAGS + 2) || cf->args->nelts < MIN_ARGS) {
         ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "The number of arguments is incorrect");
         return NGX_CONF_ERROR;
     }
 
-    if (cf->args->nelts == 4) {
-        if (ngx_strncasecmp(value[2].data, value[3].data, value[3].len) == 0) {
-            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "Duplicate flag \"%V\" detected", &value[3]);
-            return NGX_CONF_ERROR;
+    // check on duplication
+    if (cf->args->nelts > MIN_ARGS) {
+        for (i = MIN_ARGS; i < cf->args->nelts; i++) {
+            for (j = MIN_ARGS - 1; j < i; j++) {
+                ngx_log_debug2(NGX_LOG_DEBUG_HTTP, cf->log, 0, "filter http_cookie_flag - comparasion \"%V\" and \"%V\"", &value[i], &value[j]);
+                u_char *first = ngx_get_arg_name(cf->pool, value[j]);
+                u_char *second = ngx_get_arg_name(cf->pool, value[i]);
+                if (ngx_strcasecmp(first, second) == 0) {
+                    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "Duplicate flag \"%s\" (%V) detected", second, &value[i]);
+                    return NGX_CONF_ERROR;
+                }
+            }
         }
     }
 
@@ -114,6 +162,9 @@ ngx_http_cookie_flag_filter_cmd(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     cookie->cookie_name.len = value[1].len;
     cookie->httponly = 0;
     cookie->secure = 0;
+    cookie->samesite = 0;
+    cookie->samesite_lax = 0;
+    cookie->samesite_strict = 0;
 
     // normalize and check 2nd and 3rd parameters
     for (i = 2; i < cf->args->nelts; i++) {
@@ -121,6 +172,12 @@ ngx_http_cookie_flag_filter_cmd(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
             cookie->httponly = 1;
         } else if (ngx_strncasecmp(value[i].data, (u_char *) "secure", 6) == 0 && value[i].len == 6) {
             cookie->secure = 1;
+        } else if (ngx_strncasecmp(value[i].data, (u_char *) "samesite", 8) == 0 && value[i].len == 8) {
+            cookie->samesite = 1;
+        } else if (ngx_strncasecmp(value[i].data, (u_char *) "samesite=lax", 12) == 0 && value[i].len == 12) {
+            cookie->samesite_lax = 1;
+        } else if (ngx_strncasecmp(value[i].data, (u_char *) "samesite=strict", 15) == 0 && value[i].len == 15) {
+            cookie->samesite_strict = 1;
         } else {
             ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "The parameter value \"%V\" is incorrect", &value[i]);
             return NGX_CONF_ERROR;
@@ -196,6 +253,36 @@ ngx_http_cookie_flag_filter_append(ngx_http_request_t *r, ngx_http_cookie_t *coo
             return NGX_ERROR;
         }
         tmp.len = ngx_sprintf(tmp.data, "%V; secure", &header->value) - tmp.data;
+        header->value.data = tmp.data;
+        header->value.len = tmp.len;
+    }
+
+    if (cookie->samesite == 1 && ngx_strcasestrn(header->value.data, "; SameSite", 10 - 1) == NULL) {
+        tmp.data = ngx_pnalloc(r->pool, header->value.len + sizeof("; SameSite") - 1);
+        if (tmp.data == NULL) {
+            return NGX_ERROR;
+        }
+        tmp.len = ngx_sprintf(tmp.data, "%V; SameSite", &header->value) - tmp.data;
+        header->value.data = tmp.data;
+        header->value.len = tmp.len;
+    }
+
+    if (cookie->samesite_lax == 1 && ngx_strcasestrn(header->value.data, "; SameSite=Lax", 14 - 1) == NULL) {
+        tmp.data = ngx_pnalloc(r->pool, header->value.len + sizeof("; SameSite=Lax") - 1);
+        if (tmp.data == NULL) {
+            return NGX_ERROR;
+        }
+        tmp.len = ngx_sprintf(tmp.data, "%V; SameSite=Lax", &header->value) - tmp.data;
+        header->value.data = tmp.data;
+        header->value.len = tmp.len;
+    }
+
+    if (cookie->samesite_strict == 1 && ngx_strcasestrn(header->value.data, "; SameSite=Strict", 17 - 1) == NULL) {
+        tmp.data = ngx_pnalloc(r->pool, header->value.len + sizeof("; SameSite=Strict") - 1);
+        if (tmp.data == NULL) {
+            return NGX_ERROR;
+        }
+        tmp.len = ngx_sprintf(tmp.data, "%V; SameSite=Strict", &header->value) - tmp.data;
         header->value.data = tmp.data;
         header->value.len = tmp.len;
     }
