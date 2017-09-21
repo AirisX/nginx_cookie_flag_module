@@ -34,14 +34,15 @@ Earlier versions is not tested.
 
 ```Nginx
 location / {
-    set_cookie_flag Secret HttpOnly secure;
+    set_cookie_flag Secret HttpOnly secure SameSite;
     set_cookie_flag * HttpOnly;
-    set_cookie_flag SessionID secure;
+    set_cookie_flag SessionID SameSite=Lax secure;
+    set_cookie_flag SiteToken SameSite=Strict;
 }
 ```
 
 ## Description
-This module for Nginx allows to set the flags "**HttpOnly**" and "**secure**" for cookies in the "*Set-Cookie*" response headers.
+This module for Nginx allows to set the flags "**HttpOnly**", "**secure**" and "**SameSite**" for cookies in the "*Set-Cookie*" response headers.
 The register of letters for the flags doesn't matter as it will be converted to the correct value. The order of cookie declaration among multiple directives doesn't matter too.
 It is possible to set a default value using symbol "*". In this case flags will be added to the all cookies if no other value for them is overriden.
 
@@ -51,7 +52,7 @@ It is possible to set a default value using symbol "*". In this case flags will 
 
 -| -
 --- | ---
-**Syntax**  | **set_cookie_flag** \<cookie_name\|*\> [HttpOnly\|secure] [HttpOnly\|secure];
+**Syntax**  | **set_cookie_flag** \<cookie_name\|*\> [HttpOnly] [secure] [SameSite\|SameSite=[Lax|Strict]];
 **Default** | -
 **Context** | server, location
 
