@@ -52,7 +52,7 @@ It is possible to set a default value using symbol "*". In this case flags will 
 
 -| -
 --- | ---
-**Syntax**  | **set_cookie_flag** \<cookie_name\|*\> [HttpOnly] [secure] [SameSite\|SameSite=[Lax|Strict]];
+**Syntax**  | **set_cookie_flag** \<cookie_name\|*\> [HttpOnly] [secure] [SameSite\|SameSite=[Lax\|Strict]];
 **Default** | -
 **Context** | server, location
 
